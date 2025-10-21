@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Sächsisch-Trainer (Prototyp)</title>
+<style>
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;margin:18px;background:#fafafa;color:#111}
+  header{display:flex;gap:12px;align-items:center;margin-bottom:14px}
+  h1{font-size:1.3rem;margin:0}
+  .row{display:flex;gap:12px;flex-wrap:wrap}
+  select,button{padding:8px;border-radius:6px;border:1px solid #ccc;background:white}
+  button.record{background:#d9534f;color:white}
+  button.stop{background:#5cb85c;color:white}
+  .card{background:white;padding:12px;border-radius:8px;border:1px solid #e6e6e6;max-width:900px}
+  .target{font-weight:600;margin:10px 0}
+  .feedback{margin-top:10px}
+  .score{font-size:1.6rem;font-weight:700}
+  .bad{color:#d9534f}
+  .ok{color:#f0ad4e}
+  .good{color:#5cb85c}
+  .words{margin-top:8px}
+  .word.ok{background:#e8f7e8;padding:4px;border-radius:4px;margin-right:6px}
+  .word.bad{background:#fdecea;padding:4px;border-radius:4px;margin-right:6px}
+  textarea{width:100%;min-height:80px;padding:8px;border-radius:6px}
+  footer{margin-top:18px;font-size:0.9rem;color:#555}
+  .hint{font-size:0.95rem;color:#333;margin-top:8px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Sächsisch-Trainer (Prototyp)</h1>
+  <div style="margin-left:auto;color:#666">Lokaler Prototyp — Chrome/Edge empfohlen</div>
+</header>
+
+<div class="card">
+  <div class="row">
+    <label>
+      Beispiel wählen:
+      <select id="phraseSelect"></select>
+    </label>
+
+    <button id="playSample">▶️ Sample (TTS)</button>
+    <button id="recordBtn" class="record">● Aufnehmen</button>
+    <button id="stopBtn" class="stop" disabled>■ Stop</button>
+
+    <label style="margin-left:auto">
+      Eigener Satz:
+      <input id="customInput" placeholder="Neuen Satz hier einfügen" style="min-width:260px"/>
+    </label>
+    <button id="addBtn">+ hinzufügen</button>
+  </div>
+
+  <div class="hint">
+    Zieltext:
+    <div class="target" id="targetText"></div>
+  </div>
+
+  <div style="margin-top:8px">
+    Erkannt (Transkript):
+    <div style="margin-top:6px"><textarea id="recognized" readonly></textarea></div>
+  </div>
+
+  <div class="feedback">
+    <div>Score: <span id="scoreDisplay" class="score">—</span></div>
+    <div class="words" id="wordFeedback"></div>
+  </div>
+
+  <div style="margin-top:12px">
+    <strong>Tipps zur Nutzung:</strong>
+    <ul>
+      <li>Immer laut, deutlich und im selben Tempo wie die Sample-Wiedergabe sprechen.</li>
+      <li>Für echtes Sächsisch: native Audio-Beispiele (von Verwandten / Freunden) hochladen und als "Sample" einbauen.</li>
+      <li>Für bessere automatische Korrektur: ein ASR-Service mit Dialekt-Modell oder forced-alignment (z. B. Gentle/phoneme-aligner) integrieren.</li>
+    </ul>
+  </div>
+</div>
+
+<footer>
+  Limitierungen: Browser-TTS ist kein sächsisches Beispiel. Die Erkennung hängt von der Web Speech API ab und ist für Dialekte weniger genau. Für phonetische Korrektur benötigt man spezialisierte Modelle.
+</footer>
+
+<script>
+/* ------- Example dataset (editiert / erweiterbar) ------- */
+const examples = [
+  {id:1, text: "Geh ma knick dich net so an, mir sinn doch nich böse."},
+  {id:2, text: "Heit is a schöns Wetter, da gehn mer raus."},
+  {id:3, text: "Mach dir keene Sorgen, des kriegn mer hin."},
+  {id:4, text: "Ick hab heut fei richtig Hunger, wa?"}, // bewusst gemischt (Regiolekte)
+  {id:5, text: "Komm, mir geh'n en Kaffe´n holen."}
+];
+
+/* ------- UI hooks ------- */
+const select = document.getElementById('phraseSelect');
+const targetTextEl = document.getElementById('targetText');
+const playBtn = document.getElementById('playSample');
+const recordBtn = document.getElementById('recordBtn');
+const stopBtn = document.getElementById('stopBtn');
+const recognizedArea = document.getElementById('recognized');
+const scoreDisplay = document.getElementById('scoreDisplay');
+const wordFeedback = document.getElementById('wordFeedback');
+const customInput = document.getElementById('customInput');
+const addBtn = document.getElementById('addBtn');
+
+let current = examples[0];
+let recognition = null;
+
+/* populate select */
+function refreshSelect(){
+  select.innerHTML = '';
+  examples.forEach(e=>{
+    const opt = document.createElement('option');
+    opt.value = e.id;
+    opt.textContent = e.text.length>60 ? e.text.slice(0,57)+'…': e.text;
+    select.appendChild(opt);
+  });
+}
+refreshSelect();
+select.addEventListener('change', ()=>{
+  const id = Number(select.value);
+  current = examples.find(x=>x.id===id);
+  renderTarget();
+});
+
+function renderTarget(){
+  targetTextEl.textContent = current.text;
+  recognizedArea.value = '';
+  scoreDisplay.textContent = '—';
+  wordFeedback.innerHTML = '';
+}
+renderTarget();
+
+/* add custom */
+addBtn.addEventListener('click', ()=>{
+  const txt = customInput.value.trim();
+  if(!txt) return alert('Bitte zuerst Text eingeben.');
+  const id = Math.max(...examples.map(e=>e.id))+1;
+  const e = {id, text:txt};
+  examples.push(e);
+  refreshSelect();
+  select.value = id;
+  current = e;
+  renderTarget();
+  customInput.value = '';
+});
+
+/* TTS sample playback (only orientation) */
+playBtn.addEventListener('click', ()=>{
+  const utter = new SpeechSynthesisUtterance(current.text);
+  // prefer a German voice if present
+  const voices = speechSynthesis.getVoices();
+  let v = voices.find(v=>v.lang && v.lang.startsWith('de'));
+  if(v) utter.voice = v;
+  utter.rate = 0.95;
+  speechSynthesis.speak(utter);
+});
+
+/* Speech recognition setup (Web Speech API) */
+function setupRecognition(){
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if(!SpeechRecognition){
+    alert('Euer Browser unterstützt die Web Speech API nicht. Benutzt Chrome/Edge auf Desktop oder Android (mind. Chrome).');
+    recordBtn.disabled = true;
+    return;
+  }
+  recognition = new SpeechRecognition();
+  recognition.lang = 'de-DE';
+  recognition.interimResults = false;
+  recognition.maxAlternatives = 1;
+
+  recognition.onresult = (e)=>{
+    const text = e.results[0][0].transcript;
+    recognizedArea.value = text;
+    evaluate(text);
+  };
+  recognition.onerror = (ev)=>{
+    recognizedArea.value = '[Fehler bei Spracherkennung] ' + ev.error;
+    stopRecording();
+  };
+  recognition.onend = ()=>{
+    stopRecording();
+  };
+}
+setupRecognition();
+
+function startRecording(){
+  if(!recognition) return;
+  recognizedArea.value = '[Aufnahme läuft… Sprich jetzt]';
+  recordBtn.disabled = true;
+  stopBtn.disabled = false;
+  try {
+    recognition.start();
+  } catch(err){
+    // some browsers throw if start called too fast
+    console.error(err);
+  }
+}
+function stopRecording(){
+  recordBtn.disabled = false;
+  stopBtn.disabled = true;
+  try { recognition.stop(); } catch(e) {}
+}
+
+/* record controls */
+recordBtn.addEventListener('click', startRecording);
+stopBtn.addEventListener('click', stopRecording);
+
+/* ------- Fuzzy compare (Levenshtein) and word feedback ------- */
+function levenshtein(a,b){
+  a = a||''; b = b||'';
+  const A = a.split(''), B = b.split('');
+  const n = A.length, m = B.length;
+  const dp = Array.from({length:n+1},()=>Array(m+1).fill(0));
+  for(let i=0;i<=n;i++) dp[i][0]=i;
+  for(let j=0;j<=m;j++) dp[0][j]=j;
+  for(let i=1;i<=n;i++){
+    for(let j=1;j<=m;j++){
+      const cost = A[i-1]===B[j-1]?0:1;
+      dp[i][j] = Math.min(dp[i-1][j]+1, dp[i][j-1]+1, dp[i-1][j-1]+cost);
+    }
+  }
+  return dp[n][m];
+}
+
+function evaluate(recognized){
+  const target = normalize(current.text);
+  const recog = normalize(recognized);
+  const dist = levenshtein(recog, target);
+  // score 100 -> perfect, negative clip
+  const maxLen = Math.max(target.length,1);
+  let score = Math.round(Math.max(0, 100 * (1 - dist / maxLen)));
+  scoreDisplay.textContent = score + ' %';
+  scoreDisplay.className = score>80 ? 'good' : (score>50? 'ok':'bad');
+
+  // per-word feedback: split by spaces, compare words best-match
+  const tWords = target.split(/\s+/);
+  const rWords = recog.split(/\s+/);
+  // attempt word alignment: naive
+  wordFeedback.innerHTML = '';
+  tWords.forEach((tw, idx)=>{
+    // find closest recognized word by Levenshtein
+    let best = {w:'',d:999,i:-1};
+    rWords.forEach((rw,i)=>{
+      const d = levenshtein(tw, rw);
+      if(d < best.d){ best={w:
